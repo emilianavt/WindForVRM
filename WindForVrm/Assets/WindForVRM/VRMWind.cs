@@ -59,8 +59,12 @@ namespace WindForVRM
         [SerializeField] private float strengthFactor = 1.0f;
         [SerializeField] private float timeFactor = 1.0f;
         
+        // Enabling this prevents spring bones that only affect the chest are from being affected by wind
+        [SerializeField] private bool skipChest = true;
+        
         private float _windGenerateCount = 0;
         private VRMSpringBone[] _springBones = new VRMSpringBone[] { };
+        private HashSet<VRMSpringBone> chestBones = new HashSet<VRMSpringBone>();
         private Vector3[] _originalGravityDirections = new Vector3[] { };
         private float[] _originalGravityFactors = new float[] { };
         private readonly List<WindItem> _windItems = new List<WindItem>();
@@ -111,6 +115,13 @@ namespace WindForVRM
             set => timeFactor = value;
         }
         
+        /// <summary> Enabling this will prevent spring bones that only affect the chest area from being affected by wind. </summary>
+        public bool SkipChest
+        {
+            get => skipChest;
+            set => skipChest = value;
+        }
+        
         
         /// <summary>
         /// 対象となるVRMのルート要素を指定してVRMを読み込みます。
@@ -119,7 +130,54 @@ namespace WindForVRM
         /// <param name="vrmRoot"></param>
         public void LoadVrm(Transform vrmRoot)
         {
-            _springBones = vrmRoot.GetComponentsInChildren<VRMSpringBone>();
+            Animator vrmAnimator = vrmRoot.gameObject.GetComponent<Animator>();
+            chestBones.Clear();
+            HashSet<Transform> chestTransforms = new HashSet<Transform>();
+            if (vrmAnimator != null) {
+                Transform chest = vrmAnimator.GetBoneTransform(HumanBodyBones.Chest);
+                Transform neck = vrmAnimator.GetBoneTransform(HumanBodyBones.Neck);
+                Transform leftShoulder = vrmAnimator.GetBoneTransform(HumanBodyBones.LeftShoulder);
+                Transform rightShoulder = vrmAnimator.GetBoneTransform(HumanBodyBones.RightShoulder);
+                if (chest == null)
+                    chest = vrmAnimator.GetBoneTransform(HumanBodyBones.UpperChest);
+                if (neck == null)
+                    neck = vrmAnimator.GetBoneTransform(HumanBodyBones.Head);
+                if (chest != null && neck != null) {
+                    var skipBones = new HashSet<Transform>();
+                    Transform[] neckBoneArray = neck.GetComponentsInChildren<Transform>(true);
+                    foreach (var t in neckBoneArray)
+                        skipBones.Add(t);
+                    if (leftShoulder != null) {
+                        Transform[] lsBoneArray = leftShoulder.GetComponentsInChildren<Transform>(true);
+                        foreach (var t in lsBoneArray)
+                            skipBones.Add(t);
+                    }
+                    if (rightShoulder != null) {
+                        Transform[] rsBoneArray = rightShoulder.GetComponentsInChildren<Transform>(true);
+                        foreach (var t in rsBoneArray)
+                            skipBones.Add(t);
+                    }
+                    Transform[] chestBoneArray = chest.GetComponentsInChildren<Transform>(true);
+                    foreach (var t in chestBoneArray)
+                        if (!skipBones.Contains(t)) {
+                            chestTransforms.Add(t);
+                        }
+                }
+            }
+            _springBones = vrmRoot.GetComponentsInChildren<VRMSpringBone>(true);
+            foreach (var springBone in _springBones) {
+                bool isChestBone = true;
+                foreach (var t in springBone.RootBones) {
+                    if (t == null)
+                        continue;
+                    Transform[] subTransforms = t.GetComponentsInChildren<Transform>(true);
+                    foreach (var s in subTransforms)
+                        if (!chestTransforms.Contains(s))
+                            isChestBone = false;
+                }
+                if (isChestBone)
+                    chestBones.Add(springBone);
+            }
             _originalGravityDirections = _springBones.Select(b => b.m_gravityDir).ToArray();
             _originalGravityFactors = _springBones.Select(b => b.m_gravityPower).ToArray();
         }        
@@ -163,8 +221,13 @@ namespace WindForVRM
                 var bone = _springBones[i];
                 //NOTE: 力を合成して斜めに力をかけるのが狙い
                 var forceSum = _originalGravityFactors[i] * _originalGravityDirections[i] + windForce;
-                bone.m_gravityDir = forceSum.normalized;
-                bone.m_gravityPower = forceSum.magnitude;
+                if (!skipChest || !chestBones.Contains(bone)) {
+                    bone.m_gravityDir = forceSum.normalized;
+                    bone.m_gravityPower = forceSum.magnitude;
+                } else {
+                    bone.m_gravityDir = _originalGravityDirections[i];
+                    bone.m_gravityPower = _originalGravityFactors[i];
+                }
             }
         }
 
